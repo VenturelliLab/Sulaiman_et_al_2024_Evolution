@@ -80,7 +80,7 @@ class gLV:
         self.n_s = len(species)
 
         # initialize parameters
-        self.n_params = self.n_s + self.n_s**2
+        self.n_params = self.n_s + self.n_s**2 + self.n_s * (self.n_s - 1)
         self.params = -.1*np.ones(self.n_params)
 
         # set small positive growth rate
@@ -114,8 +114,9 @@ class gLV:
             # reshape params to growth rates and interaction matrix
             r = params[:self.n_s]
             A = jnp.reshape(params[self.n_s:self.n_s+self.n_s**2], [self.n_s, self.n_s])
+            B = jnp.reshape(params[self.n_s+self.n_s**2:], [self.n_s, self.n_s-1])
 
-            return x*(r + A@x)
+            return x*(r + A@x + x[0]*B@x[1:])
         self.dX_dt = jit(dX_dt)
 
         # adjoint sensitivity derivative
