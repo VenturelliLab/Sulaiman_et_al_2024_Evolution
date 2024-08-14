@@ -11,6 +11,7 @@ from jax.experimental.ode import odeint
 
 # import optimizer for parameter estimation
 from scipy.optimize import minimize
+from scipy.special import comb
 
 import matplotlib.pyplot as plt
 
@@ -79,8 +80,28 @@ class gLV:
         # dimension of model output
         self.n_s = len(species)
 
+        # dimension of 3rd order basis
+        dim1 = len(species)
+        dim2 = int(comb(dim1 - 1, 2))
+
+        # basis function of 3rd order terms
+        def basis3(v):
+
+            basis_mat = jnp.zeros([dim1, dim2])
+            for i, vi in enumerate(v):
+                l = 0
+                for j, vj in enumerate(v):
+                    if j != i:
+                        for k, vk in enumerate(v):
+                            if k > j and k != i:
+                                basis_mat = basis_mat.at[i, l].set(vj * vk)
+                                l += 1
+
+            return basis_mat
+        self.basis3 = jit(basis3)
+
         # initialize parameters
-        self.n_params = self.n_s + self.n_s**2 + self.n_s * (self.n_s - 1)
+        self.n_params = self.n_s + self.n_s**2 + dim1*dim2
         self.params = -.1*np.ones(self.n_params)
 
         # set small positive growth rate
@@ -114,9 +135,9 @@ class gLV:
             # reshape params to growth rates and interaction matrix
             r = params[:self.n_s]
             A = jnp.reshape(params[self.n_s:self.n_s+self.n_s**2], [self.n_s, self.n_s])
-            B = jnp.reshape(params[self.n_s+self.n_s**2:], [self.n_s, self.n_s-1])
+            B = jnp.reshape(params[self.n_s+self.n_s**2:], [dim1, dim2])
 
-            return x*(r + A@x + x[0]*B@x[1:])
+            return x*(r + A@x + jnp.einsum('ij,ij->i', B, basis3(x)))
         self.dX_dt = jit(dX_dt)
 
         # adjoint sensitivity derivative
