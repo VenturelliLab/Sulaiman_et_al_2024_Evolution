@@ -12,14 +12,18 @@ from jax.experimental.ode import odeint
 # import optimizer for parameter estimation
 from scipy.optimize import minimize
 from scipy.special import comb
+from scipy.stats import norm, pearsonr
 
-import matplotlib.pyplot as plt
+# pandas for exporting / reading dataframes
+import pandas as pd
+
 
 # define function that returns model sensitivity vector
 def runODE(t_eval, x0, params, dX_dt):
     # solve ODE model
     y = odeint(dX_dt, x0, t_eval, params)
     return jnp.nan_to_num(y)
+
 
 # define function to integrate adjoint sensitivity equations backwards
 def runODEA(t_eval, xt, at, params, dXA_dt):
@@ -35,6 +39,7 @@ def runODEA(t_eval, xt, at, params, dXA_dt):
     # return parameter gradient
     return l0[-1]
 
+
 # define function that returns model sensitivity vector
 def runODEZ(t_eval, x0, params, dXZ_dt):
     # check dimensions
@@ -47,13 +52,12 @@ def runODEZ(t_eval, x0, params, dXZ_dt):
 
     return jnp.nan_to_num(y), jnp.nan_to_num(Z)
 
+
 ### Function to process dataframes ###
 def process_df(df, species):
-
     # store measured datasets for quick access
     data = []
     for treatment, comm_data in df.groupby("Treatments"):
-
         # make sure comm_data is sorted in chronological order
         comm_data = comm_data.sort_values(by='Time', ascending=True).copy()
 
@@ -67,6 +71,7 @@ def process_df(df, species):
         data.append([treatment, t_eval, Y_measured])
 
     return data
+
 
 class gLV:
     def __init__(self, species, dataframe, verbose=True):
@@ -98,11 +103,12 @@ class gLV:
                                 l += 1
 
             return basis_mat
+
         self.basis3 = jit(basis3)
 
         # initialize parameters
-        self.n_params = self.n_s + self.n_s**2 + dim1*dim2
-        self.params = -.1*np.ones(self.n_params)
+        self.n_params = self.n_s + self.n_s ** 2 + dim1 * dim2
+        self.params = -.1 * np.ones(self.n_params)
 
         # set small positive growth rate
         self.params[:self.n_s] = .3
@@ -129,15 +135,16 @@ class gLV:
         self.A = None
         self.Ainv = None
 
-        # jit compiled derivative of self.dX_dt
+        # jit compiled self.dX_dt
         def dX_dt(x, t, params):
 
             # reshape params to growth rates and interaction matrix
             r = params[:self.n_s]
-            A = jnp.reshape(params[self.n_s:self.n_s+self.n_s**2], [self.n_s, self.n_s])
-            B = jnp.reshape(params[self.n_s+self.n_s**2:], [dim1, dim2])
+            A = jnp.reshape(params[self.n_s:self.n_s + self.n_s ** 2], [self.n_s, self.n_s])
+            B = jnp.reshape(params[self.n_s + self.n_s ** 2:], [dim1, dim2])
 
-            return x*(r + A@x + jnp.einsum('ij,ij->i', B, basis3(x)))
+            return x * (r + A @ x + jnp.einsum('ij,ij->i', B, basis3(x)))
+
         self.dX_dt = jit(dX_dt)
 
         # adjoint sensitivity derivative
@@ -149,10 +156,11 @@ class gLV:
             # vjpfun, which evaluates a^T Jx, a^T Jp
             # where Jx is the gradient of the self.dX_dt w.r.t. x
             # and   Jp is the gradient of the self.dX_dt w.r.t. parameters
-            y_dot, vjpfun = jax.vjp(lambda x, params: self.dX_dt(x,t,params), x, params)
+            y_dot, vjpfun = jax.vjp(lambda x, params: self.dX_dt(x, t, params), x, params)
             vjps = vjpfun(a)
 
             return (-y_dot, *vjps)
+
         self.dXA_dt = jit(dXA_dt)
 
         # if not vectorized, xz will be 1-D
@@ -161,7 +169,7 @@ class gLV:
             x, Z = xZ
 
             # compute derivatives
-            dxdt  = self.dX_dt(x, t, params)
+            dxdt = self.dX_dt(x, t, params)
 
             # time derivative of initial condition sensitivity
             # Jacobian-vector-product approach is surprisingly slow
@@ -169,73 +177,82 @@ class gLV:
             Jx = jacfwd(self.dX_dt, 0)(x, t, params)
 
             # time derivative of parameter sensitivity
-            JxZ = Jx@Z # JxV(Z)
+            JxZ = Jx @ Z  # JxV(Z)
 
             # compute gradient of model w.r.t. parameters
             Jp = jacfwd(self.dX_dt, 2)(x, t, params)
 
             # return derivatives
             return (dxdt, JxZ + Jp)
+
         self.dXZ_dt = jit(dXZ_dt)
 
         # jit compile function to integrate ODE
-        self.runODE  = jit(lambda t_eval, x, params: runODE(t_eval, x[0], params, self.dX_dt))
+        self.runODE = jit(lambda t_eval, x, params: runODE(t_eval, x[0], params, self.dX_dt))
 
         # jit compile function to integrate forward sensitivity equations
         self.runODEZ = jit(lambda t_eval, x, params: runODEZ(t_eval, x[0], params, self.dXZ_dt))
 
         # jit compile function to integrate adjoint sensitivity equations
-        self.adjoint = jit(vmap(jacfwd(lambda xt, yt, B: jnp.einsum("i,ij,j", yt-xt, B, yt-xt)/2.), (0, 0, None)))
+        self.adjoint = jit(vmap(jacfwd(lambda xt, yt, B: jnp.einsum("i,ij,j", yt - xt, B, yt - xt) / 2.), (0, 0, None)))
         self.runODEA = jit(lambda t, xt, at, params: runODEA(t, xt, at, params, self.dXA_dt))
 
         # JIT compile matrix operations
         def GAinvG(G, Ainv):
             return jnp.einsum("tki,ij,tlj->tkl", G, Ainv, G)
+
         self.GAinvG = jit(GAinvG)
 
         def yCOV_next(Y_error, G, Ainv):
             # sum over time dimension
             return jnp.einsum('tk,tl->kl', Y_error, Y_error) + jnp.sum(self.GAinvG(G, Ainv), 0)
+
         self.yCOV_next = jit(yCOV_next)
 
         def A_next(G, Beta):
             A_n = jnp.einsum('tki, kl, tlj->ij', G, Beta, G)
-            A_n = (A_n + A_n.T)/2.
+            A_n = (A_n + A_n.T) / 2.
             return A_n
+
         self.A_next = jit(A_next)
 
         # jit compile inverse Hessian computation step
         def Ainv_next(G, Ainv, BetaInv):
-            GAinv = G@Ainv # [n_t, n_p]
-            Ainv_step = GAinv.T@jnp.linalg.inv(BetaInv + GAinv@G.T)@GAinv
+            GAinv = G @ Ainv  # [n_t, n_p]
+            Ainv_step = GAinv.T @ jnp.linalg.inv(BetaInv + GAinv @ G.T) @ GAinv
             # Ainv_step = jnp.einsum("ti,tk,kj->ij", GAinv, jnp.linalg.inv(BetaInv + jnp.einsum("ti,ki->tk", GAinv, G)), GAinv)
-            Ainv_step = (Ainv_step + Ainv_step.T)/2.
+            Ainv_step = (Ainv_step + Ainv_step.T) / 2.
             return Ainv_step
+
         self.Ainv_next = jit(Ainv_next)
 
         # jit compile inverse Hessian computation step
         def Ainv_prev(G, Ainv, BetaInv):
-            GAinv = G@Ainv
-            Ainv_step = GAinv.T@jnp.linalg.inv(GAinv@G.T - BetaInv)@GAinv
-            Ainv_step = (Ainv_step + Ainv_step.T)/2.
+            GAinv = G @ Ainv
+            Ainv_step = GAinv.T @ jnp.linalg.inv(GAinv @ G.T - BetaInv) @ GAinv
+            Ainv_step = (Ainv_step + Ainv_step.T) / 2.
             return Ainv_step
+
         self.Ainv_prev = jit(Ainv_prev)
 
         # jit compile function to compute log of determinant of a matrix
         def log_det(A):
             L = jnp.linalg.cholesky(A)
-            return 2*jnp.sum(jnp.log(jnp.diag(L)))
+            return 2 * jnp.sum(jnp.log(jnp.diag(L)))
+
         self.log_det = jit(log_det)
 
         # approximate inverse of A, where A = LL^T, Ainv = Linv^T Linv
         def compute_Ainv(A):
             Linv = jnp.linalg.inv(jnp.linalg.cholesky(A))
-            Ainv = Linv.T@Linv
+            Ainv = Linv.T @ Linv
             return Ainv
+
         self.compute_Ainv = jit(compute_Ainv)
 
         def eval_grad_NLP(Y_error, Beta, G):
             return jnp.einsum('tk,kl,tli->i', Y_error, Beta, G)
+
         self.eval_grad_NLP = jit(eval_grad_NLP)
 
         # jit compile prediction covariance computation
@@ -244,7 +261,8 @@ class gLV:
             n_t, n_y, n_theta = G.shape
             # stack G over time points [n, n_t, n_out, n_theta]--> [n, n_t*n_out, n_theta]
             Gaug = jnp.concatenate(G, 0)
-            return jnp.eye(n_t*n_y) + jnp.einsum("kl,li,ij,mj->km", block_diag(*[Beta]*n_t), Gaug, Ainv, Gaug)
+            return jnp.eye(n_t * n_y) + jnp.einsum("kl,li,ij,mj->km", block_diag(*[Beta] * n_t), Gaug, Ainv, Gaug)
+
         self.compute_searchCOV = jit(compute_searchCOV)
 
         # jit compile prediction covariance computation
@@ -253,7 +271,8 @@ class gLV:
             n_t, n_y, n_theta = G.shape
             # stack G over time points [n, n_t, n_out, n_theta]--> [n, n_t*n_out, n_theta]
             Gaug = jnp.concatenate(G, 0)
-            return jnp.eye(n_t*n_y) - jnp.einsum("kl,li,ij,mj->km", block_diag(*[Beta]*n_t), Gaug, Ainv, Gaug)
+            return jnp.eye(n_t * n_y) - jnp.einsum("kl,li,ij,mj->km", block_diag(*[Beta] * n_t), Gaug, Ainv, Gaug)
+
         self.compute_forgetCOV = jit(compute_forgetCOV)
 
         # compute utility of each experiment
@@ -263,6 +282,7 @@ class gLV:
             # log eig predCOV has shape [n_out]
             # det predCOV is a scalar
             return jnp.nansum(jnp.log(jnp.linalg.eigvalsh(searchCOV)))
+
         self.utility = jit(utility)
 
     def fit(self, evidence_tol=1e-3, nlp_tol=None, alpha_0=1., patience=1, max_fails=2, beta=1e-3):
@@ -274,14 +294,14 @@ class gLV:
         passes = 0
         fails = 0
         convergence = np.inf
-        previdence  = -np.inf
+        previdence = -np.inf
 
         # initialize hyper parameters
         self.init_hypers()
 
         while passes < patience and fails < max_fails:
             # update Alpha and Beta hyper-parameters
-            if self.itr>0:
+            if self.itr > 0:
                 self.update_hypers()
                 nlp_tol = 1e-3
 
@@ -299,9 +319,9 @@ class gLV:
             self.params = self.res.x
 
             # update precision
-            if self.itr==0:
+            if self.itr == 0:
                 self.alpha = self.alpha_0
-                self.Alpha = self.alpha_0*np.ones(self.n_params)
+                self.Alpha = self.alpha_0 * np.ones(self.n_params)
             self.update_precision()
             # update covariance (Hessian inverse)
             self.update_covariance()
@@ -311,7 +331,7 @@ class gLV:
             assert not np.isnan(self.evidence), "Evidence is NaN! Something went wrong."
 
             # check convergence
-            convergence = np.abs(previdence - self.evidence) / np.max([1.,np.abs(self.evidence)])
+            convergence = np.abs(previdence - self.evidence) / np.max([1., np.abs(self.evidence)])
 
             # update pass count
             if convergence < evidence_tol:
@@ -340,7 +360,7 @@ class gLV:
         for treatment, t_eval, Y_measured in self.dataset:
 
             # count effective number of uncorrelated observations
-            k = 0 # number of outputs
+            k = 0  # number of outputs
             for series in Y_measured.T:
                 # check if there is any variation in the series
                 if np.std(series) > 0:
@@ -357,7 +377,7 @@ class gLV:
 
         # initial guess of parameter precision
         self.alpha = 1e-3
-        self.Alpha = self.alpha*np.ones(self.n_params)
+        self.Alpha = self.alpha * np.ones(self.n_params)
         # self.alpha = 0.
         # self.Alpha = np.zeros(self.n_params)
 
@@ -373,7 +393,6 @@ class gLV:
 
         # loop over each sample in dataset
         for treatment, t_eval, Y_measured in self.dataset:
-
             # for each output
             output, G = self.runODEZ(t_eval, Y_measured, self.params)
 
@@ -385,13 +404,13 @@ class gLV:
 
         # maximize complete data log-likelihood w.r.t. alpha and beta
         Ainv_ii = np.diag(self.Ainv)
-        self.alpha = self.n_params/(np.sum((self.params-self.prior)**2) + np.sum(Ainv_ii) + 2.*self.a)
+        self.alpha = self.n_params / (np.sum((self.params - self.prior) ** 2) + np.sum(Ainv_ii) + 2. * self.a)
         # self.Alpha = self.alpha*np.ones(self.n_params)
-        self.Alpha = 1./((self.params-self.prior)**2 + Ainv_ii + 2.*self.a)
+        self.Alpha = 1. / ((self.params - self.prior) ** 2 + Ainv_ii + 2. * self.a)
 
         # update output precision
-        self.Beta = self.N*np.linalg.inv(yCOV + 2.*self.b*np.eye(self.n_s))
-        self.Beta = (self.Beta + self.Beta.T)/2.
+        self.Beta = self.N * np.linalg.inv(yCOV + 2. * self.b * np.eye(self.n_s))
+        self.Beta = (self.Beta + self.Beta.T) / 2.
 
         # make sure that precision is positive definite (algorithm 3.3 in Numerical Optimization)
         self.Beta = self.make_pos_def(self.Beta, jnp.ones(self.n_s))
@@ -404,13 +423,12 @@ class gLV:
 
     def objective(self, params):
         # compute negative log posterior (NLP)
-        self.NLP = np.sum(self.Alpha * (params-self.prior)**2) / 2.
+        self.NLP = np.sum(self.Alpha * (params - self.prior) ** 2) / 2.
         # compute residuals
         self.RES = 0.
 
         # loop over each sample in dataset
         for treatment, t_eval, Y_measured in self.dataset:
-
             # for each output
             output = np.nan_to_num(self.runODE(t_eval, Y_measured, params))
 
@@ -418,8 +436,8 @@ class gLV:
             Y_error = output[1:] - Y_measured[1:]
 
             # Determine SSE and gradient of SSE
-            self.NLP += np.einsum('tk,kl,tl->', Y_error, self.Beta, Y_error)/2.
-            self.RES += np.sum(Y_error)/self.N
+            self.NLP += np.einsum('tk,kl,tl->', Y_error, self.Beta, Y_error) / 2.
+            self.RES += np.sum(Y_error) / self.N
 
         # return NLP
         return self.NLP
@@ -427,7 +445,7 @@ class gLV:
     def jacobian_adj(self, params):
 
         # compute gradient of negative log posterior
-        grad_NLP = self.Alpha*(params-self.prior)
+        grad_NLP = self.Alpha * (params - self.prior)
 
         # loop over each sample in dataset
         for treatment, t_eval, Y_measured in self.dataset:
@@ -448,11 +466,10 @@ class gLV:
     def jacobian_fwd(self, params):
 
         # compute gradient of negative log posterior
-        grad_NLP = self.Alpha*(params-self.prior)
+        grad_NLP = self.Alpha * (params - self.prior)
 
         # loop over each sample in dataset
         for treatment, t_eval, Y_measured in self.dataset:
-
             # for each output
             output, G = self.runODEZ(t_eval, Y_measured, params)
 
@@ -472,7 +489,6 @@ class gLV:
 
         # loop over each sample in dataset
         for treatment, t_eval, Y_measured in self.dataset:
-
             # for each output
             output, G = self.runODEZ(t_eval, Y_measured, params)
 
@@ -480,7 +496,7 @@ class gLV:
             self.A += self.A_next(G[1:], self.Beta)
 
         # make sure precision is symmetric
-        self.A = (self.A + self.A.T)/2.
+        self.A = (self.A + self.A.T) / 2.
 
         # return Hessian
         return self.A
@@ -491,7 +507,6 @@ class gLV:
 
         # loop over each sample in dataset
         for treatment, t_eval, Y_measured in self.dataset:
-
             # for each output
             output, G = self.runODEZ(t_eval, Y_measured, self.params)
 
@@ -499,7 +514,7 @@ class gLV:
             self.A += self.A_next(G[1:], self.Beta)
 
         # Laplace approximation of posterior precision
-        self.A = (self.A + self.A.T)/2.
+        self.A = (self.A + self.A.T) / 2.
         self.A = self.make_pos_def(self.A, self.Alpha)
 
     def update_covariance(self):
@@ -509,9 +524,9 @@ class gLV:
     # compute the log marginal likelihood
     def update_evidence(self):
         # compute evidence
-        self.evidence = self.N/2*self.log_det(self.Beta)  + \
-                        1/2*np.nansum(np.log(self.Alpha)) - \
-                        1/2*self.log_det(self.A) - self.NLP
+        self.evidence = self.N / 2 * self.log_det(self.Beta) + \
+                        1 / 2 * np.nansum(np.log(self.Alpha)) - \
+                        1 / 2 * self.log_det(self.A) - self.NLP
 
         # print evidence
         if self.verbose:
@@ -528,12 +543,11 @@ class gLV:
 
         # use cholesky decomposition to check positive-definiteness of A
         while jnp.isnan(jnp.linalg.cholesky(A)).any():
-
             # increase precision of prior until posterior precision is positive definite
-            A += tau*jnp.diag(Alpha)
+            A += tau * jnp.diag(Alpha)
 
             # increase prior precision
-            tau = np.max([2*tau, beta])
+            tau = np.max([2 * tau, beta])
 
         return A
 
@@ -559,24 +573,41 @@ class gLV:
         COV = self.BetaInv + self.GAinvG(G, self.Ainv)
 
         # determine confidence interval for species
-        stdv = n_std*jnp.sqrt(vmap(jnp.diag)(COV))
+        stdv = n_std * jnp.sqrt(vmap(jnp.diag)(COV))
 
         return np.array(output), np.array(stdv)
 
-    def get_params(self,):
-        # return expected value and standard deviation of model parameters
+    def get_params(self, ):
 
-        # reshape params to growth rates and interaction matrix
-        r = self.params[:self.n_s]
-        A = np.reshape(self.params[self.n_s:self.n_s + self.n_s ** 2], [self.n_s, self.n_s])
+        # init param names with growth rates
+        param_names = list(self.species_names)
 
-        # parameter stdv
-        params_stdv = np.sqrt(np.diag(self.Ainv))
+        # interaction terms
+        for s1 in self.species_names:
+            for s2 in self.species_names:
+                param_names += [s1 + "<-" + s2]
 
-        r_stdv = params_stdv[:self.n_s]
-        A_stdv = np.reshape(params_stdv[self.n_s:self.n_s + self.n_s ** 2], [self.n_s, self.n_s])
+        # higher order terms
+        for i, s1 in enumerate(self.species_names):
+            for j, s2 in enumerate(self.species_names):
+                if j != i:
+                    for k, s3 in enumerate(self.species_names):
+                        if k > j and k != i:
+                            param_names += [s1 + "<-[" + s2 + "*" + s3 + "]"]
 
-        return r, A, r_stdv, A_stdv
+        # compute Wald test for each parameter
+        std_errors = np.sqrt(np.diag(self.Ainv))
+        walds = self.params / std_errors
+        wald_p_vals = 2 * norm.cdf(-np.abs(walds))
+
+        # save to df
+        df = pd.DataFrame()
+        df["Param name"] = param_names
+        df["Param value"] = self.params
+        df["Param stdv"] = std_errors
+        df["Param p-value"] = wald_p_vals
+
+        return df
 
     def design(self, df_design, N, batch_size=512, Ainv_q=None):
         # process dataframe
@@ -635,7 +666,7 @@ class gLV:
                 treatment, t_eval, Y_measured = design_space[exp]
                 if treatment not in best_experiments:
                     best_experiments.append(treatment)
-                    N_selected +=  1
+                    N_selected += 1
 
                     # update parameter covariance given selected experiment
                     for Gt in Gs[treatment]:
@@ -722,8 +753,8 @@ class gLV:
 
             # expected improvement
             improvement = pred - s_best
-            z = improvement/stdv
-            return improvement*cdf(z) + stdv*pdf(z)
+            z = improvement / stdv
+            return improvement * cdf(z) + stdv * pdf(z)
 
             # UCB
             # return pred + stdv
