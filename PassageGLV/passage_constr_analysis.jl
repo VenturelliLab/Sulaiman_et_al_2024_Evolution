@@ -1,22 +1,17 @@
 include("get_data.jl")
 include("GLV.jl")
-using JLD2, DataFrames, Statistics, PyPlot, ColorSchemes, Colors, Plots
+using JLD2, Plots, StatsPlots, Statistics
+using PyPlot, HypothesisTests, ProgressMeter
 
 # Check original passage data performance
-df = DataFrame(
-    model_num = Int[],
-    mse = Float64[],
-    mses = Vector{Float64}[],
-    corr = Float64[],
-    corrs = Vector{Float64}[],
-)
 preds = []
 passage_data_size = size(passage_data, 3)
-show_idxs = passage_data_size
 
-# For simplicity, we will only consider experiments that has 35 passages.
+# Record predictions
 path_name = "."
-for (idx, names) in enumerate(readdir(path_name * "//GLV_pars_passage_constr"))
+failed_models = 0
+total_models = 0
+ProgressMeter.@showprogress for (idx, names) in enumerate(readdir(path_name * "//GLV_pars_passage_constr"))
     # Model fit settings
     dt = 3/12 # time step is 3/12 or 0.25
     passage_tf = 24.0
@@ -34,30 +29,19 @@ for (idx, names) in enumerate(readdir(path_name * "//GLV_pars_passage_constr"))
     passage_corr = pcorr(truth, preds_mean)
     passage_mse = mse_loss(truth, preds_mean)
 
-    # Compute feature-wise correlation
-    passage_corrs = zeros(size(passage_data, 1))
-    passage_mses = zeros(size(passage_data, 1))
-    for i in axes(passage_data, 1)
-        truth = passage_data[i, :, end]
-        truth_idx = .!isnan.(truth) .&& .!iszero.(truth)
-        truth = truth[truth_idx]
-        preds_mean = passage_x[i, :, end][truth_idx]
-        try
-            passage_corrs[i] = pcorr(truth, preds_mean)
-            passage_mses[i] = mse_loss(truth, preds_mean)
-        catch e
-            println(e)
-        end
-    end
-
-    # We want to "passage" dynamics to filter failed cases
+    # We want to "passage" dynamics to filter failed cases. Here, we are looking at the internal dynamics within passages.
     passage_x2, passage_t = passage_GLV(passage_data[:, :, 1], pars, dt, passage_tf, Int(passage_iters), num_passages, dilution_factor)
     if passage_corr < 0.85 || any(passage_x .> 1e2) || any(passage_x2 .> 1e2) || isnan(passage_corr) # Filter models that succeeded
+        failed_models += 1
+        total_models += 1
         continue
     end
+    total_models += 1
     push!(preds, passage_x)
-    push!(df, (idx, passage_mse, passage_mses, passage_corr, passage_corrs))
 end
+println("Failed models: ", failed_models)
+println("Successful models: ", total_models - failed_models)
+println("Failed models Percentage: ", failed_models/total_models*100.0)
 all_preds_mean = mean(preds)
 all_preds_std = std(preds)
 
@@ -99,6 +83,21 @@ for i in axes(passage_data, 2)
     pred_df = vcat(pred_df, _df)
     end
 end
+
+# Example for computing the correlation (sanity check)
+passage_7_df = pred_df[pred_df.passage .== 8, :]
+
+# Compute the correlation
+true_y = passage_7_df[:, "true"]
+pred_y = passage_7_df[:, "pred"]
+
+# Remove zeros
+not_zeros = .!iszero.(pred_y)
+true_y_rz = true_y[not_zeros]
+pred_y_rz = pred_y[not_zeros]
+
+# Compute the correlation
+correlation = cor(true_y_rz, pred_y_rz)
 
 # Save dataframe
 CSV.write(path_name * "//EXP0004_passage_constr.csv", pred_df)

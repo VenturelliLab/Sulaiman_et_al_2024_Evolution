@@ -9,9 +9,9 @@ end
     using Random, Optimization, OptimizationNLopt, JLD2
 end
 
+# Easiest way to train multiple models, may not be the most efficient though.
 path_name = "GLV_pars_passage_constr"
-
-@distributed for i = 1:64
+@distributed for i = 1:64 # Note that i is not used to save anything
     # Model fit settings
     Random.seed!(i) # Try fixing the seed, but it may be ignored
     dt = 3/12 # time step is 3/12 or 0.25
@@ -72,9 +72,16 @@ path_name = "GLV_pars_passage_constr"
         local_method = NLopt.LN_SBPLX() # More robust nelder-mead
     ) 
 
-    # Save solutions
+    # Save solutions. If file exists, try again
+    filename = path_name * "//GLV_pars_" * randstring(5) * ".jld2"
+    tries = 10 # Try 10 times
+    cur_try = 0
+    while isfile(filename) && cur_try < tries
+        filename = path_name * "//GLV_pars_" * randstring(5) * ".jld2"
+        cur_try += 1
+    end
     JLD2.save(
-        path_name * "//GLV_pars_" * randstring(5) * ".jld2", 
+        filename, 
         "GLV_pars", sol.u, 
         "best_loss", f(sol.u), 
     )
