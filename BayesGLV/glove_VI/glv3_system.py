@@ -9,7 +9,7 @@ from functools import partial
 # basis function of 3rd order terms
 @jit
 def basis3(v):
-    basis_mat = jnp.zeros([len(v), (len(v) - 1) * (len(v) - 2) / 2])
+    basis_mat = jnp.zeros([len(v), int((len(v) - 1) * (len(v) - 2) / 2)])
     for i, vi in enumerate(v):
         l = 0
         for j, vj in enumerate(v):
@@ -32,7 +32,7 @@ def system(x, t, params, inputs, s_cap, m_cap):
     r, A, B = params
 
     # growth rates
-    dsdt = s * (r + A @ s + jnp.einsum('ij,ij->i', B, basis3(x))) * (1. - s / s_cap)
+    dsdt = s * (r + A @ s + jnp.einsum('ij,ij->i', B, basis3(s))) * (1. - s / s_cap)
 
     # rate of change of mediators (empty for gLV)
     dmdt = jnp.zeros(len(m))
