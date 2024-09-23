@@ -2,7 +2,8 @@ import pandas as pd
 import numpy as np
 from scipy.optimize import curve_fit
 
-### Function to process dataframes ###
+
+# Function to process dataframes
 def process_df_glove(df, species):
     # store measured datasets for quick access
     data = []
@@ -20,6 +21,7 @@ def process_df_glove(df, species):
         data.append([treatment, t_eval, Y_measured])
 
     return data
+
 
 # Function to process dataframes
 def process_df(df, species, mediators, inputs):
@@ -81,15 +83,15 @@ def process_df(df, species, mediators, inputs):
 def lin_fit(x, a, b):
     return a + b * x
 
-def check_convergence(f):
 
+def check_convergence(f):
     # convert to numpy array
     f = np.array(f)
 
     # ignore nans
     f = f[~np.isnan(f)]
 
-    p, cov = curve_fit(lin_fit, xdata=np.arange(len(f)), ydata=f/np.max(np.abs(f)), p0=[1., 0.])
+    p, cov = curve_fit(lin_fit, xdata=np.arange(len(f)), ydata=f / np.max(np.abs(f)), p0=[1., 0.])
     a, b, = p
 
     # return value of slope

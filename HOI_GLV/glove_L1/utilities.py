@@ -3,6 +3,27 @@ import numpy as np
 from scipy.optimize import curve_fit
 
 
+### Function to process dataframes ###
+def process_df_glove(df, species):
+
+    # store measured datasets for quick access
+    data = []
+    for treatment, comm_data in df.groupby("Treatments"):
+
+        # make sure comm_data is sorted in chronological order
+        comm_data = comm_data.sort_values(by='Time', ascending=True).copy()
+
+        # pull evaluation times
+        t_eval = np.array(comm_data['Time'].values, float)
+
+        # pull species data
+        Y_measured = np.clip(np.array(comm_data[species].values, float), 0., np.inf)
+
+        # append t_eval and Y_measured to data list
+        data.append([treatment, t_eval, Y_measured])
+
+    return data
+
 # Function to process dataframes
 def process_df(df, species):
     # return vector of evaluation times, t = [n]

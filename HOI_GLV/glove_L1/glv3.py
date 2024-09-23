@@ -141,7 +141,7 @@ class gLV:
                 # check convergence
                 f.append(self.rmse(self.z))
 
-                print("Epoch {:.0f}, RMSE: {:.3f}".format(epoch, f[-1]))
+                print("Epoch {:.0f}, RMSE: {:.5f}".format(epoch, f[-1]))
             epoch += 1
 
             # stochastic gradient descent
