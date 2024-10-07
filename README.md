@@ -1,4 +1,4 @@
-# Human gut microbiota interactions shape the long-term growth dynamics and evolutionary adaptations of Clostridioides difficile
+# *Phocaeicola vulgatus* shapes the long-term growth dynamics and evolutionary adaptations of *Clostridioides difficile*
 
 ## Contents
 
